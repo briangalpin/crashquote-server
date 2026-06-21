@@ -34,8 +34,12 @@
   .mark svg{width:23px;height:23px;}
   .brandname{font-size:18px;font-weight:700;letter-spacing:-0.3px;}
   .brandsub{font-size:11px;color:var(--slate);margin-top:-2px;}
-  .trust{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--teal-deep);background:var(--teal-soft);padding:7px 13px;border-radius:30px;font-weight:500;}
+  .topbar-actions{margin-left:auto;display:flex;align-items:center;gap:8px;}
+  .trust{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--teal-deep);background:var(--teal-soft);padding:7px 13px;border-radius:30px;font-weight:500;}
   .trust .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px var(--green-soft);}
+  .hist-btn{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink);background:var(--card);border:1.5px solid var(--line);padding:7px 13px;border-radius:30px;cursor:pointer;box-shadow:var(--shadow);transition:all .2s;}
+  .hist-btn:hover{background:var(--mist);}
+  .hist-btn svg{width:15px;height:15px;}
 
   /* Journey progress */
   .journey{display:flex;align-items:center;padding:6px 22px 22px;gap:0;}
@@ -80,7 +84,9 @@
   .btn-primary{background:linear-gradient(135deg,var(--teal),var(--teal-deep));color:#fff;box-shadow:0 8px 22px rgba(14,139,139,.3);}
   .btn-primary:active{transform:translateY(1px);box-shadow:0 4px 14px rgba(14,139,139,.3);}
   .btn-ghost{background:var(--card);color:var(--ink);border:1.5px solid var(--line);box-shadow:var(--shadow);}
+  .btn-ghost:active{transform:translateY(1px);}
   .btn-amber{background:linear-gradient(135deg,var(--amber),#E08A28);color:#fff;box-shadow:0 8px 22px rgba(242,160,61,.3);}
+  .btn-danger{background:var(--rose-soft);color:var(--rose);border:1.5px solid #F5C5C0;}
   .btnrow{display:flex;gap:11px;}
   .btnrow .btn{flex:1;}
   .btnrow .grow{flex:2;}
@@ -146,6 +152,25 @@
     .desktop-split{display:grid;grid-template-columns:1fr 360px;gap:24px;align-items:start;}
     .desktop-sticky{position:sticky;top:20px;}
   }
+
+  /* History screen */
+  .qcard{background:var(--card);border-radius:20px;padding:20px;box-shadow:var(--shadow);border:1px solid var(--line);margin-bottom:14px;}
+  .qcard-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px;}
+  .qcard-rego{font-family:'Bricolage Grotesque',sans-serif;font-size:20px;font-weight:700;letter-spacing:-0.3px;}
+  .qcard-vehicle{font-size:13px;color:var(--slate);margin-top:2px;}
+  .qcard-date{font-size:11px;color:var(--slate);margin-top:4px;}
+  .qcard-total{text-align:right;flex-shrink:0;}
+  .qcard-amount{font-family:'Bricolage Grotesque',sans-serif;font-size:22px;font-weight:700;color:var(--teal-deep);}
+  .qcard-gst{font-size:11px;color:var(--slate);margin-top:2px;}
+  .empty-state{text-align:center;padding:60px 22px;}
+  .empty-icon{font-size:48px;margin-bottom:16px;}
+  .empty-h{font-family:'Bricolage Grotesque',sans-serif;font-size:20px;font-weight:700;margin-bottom:8px;}
+  .empty-sub{font-size:14px;color:var(--slate);max-width:32ch;margin:0 auto;}
+
+  /* Save feedback badge */
+  .save-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:7px 13px;border-radius:30px;margin-bottom:12px;}
+  .save-badge.ok{background:var(--green-soft);color:#2E7D53;}
+  .save-badge.err{background:var(--rose-soft);color:var(--rose);}
 </style>
 </head>
 <body>
@@ -154,7 +179,21 @@
 
 <script>
 const SHOP_RATE = 95;
-const state = { screen:"capture", photos:[], vehicle:{rego:"",make:"",model:"",year:"",colour:""}, damage:null, lineItems:[], error:"" };
+const state = {
+  screen: "capture",
+  photos: [],
+  vehicle: {rego:"",make:"",model:"",year:"",colour:""},
+  damage: null,
+  lineItems: [],
+  error: "",
+  // Quote persistence
+  savedId: null,
+  saveFeedback: "",   // "ok" | "err" | ""
+  saving: false,
+  // History
+  quotes: [],
+  quotesLoading: false,
+};
 
 const SEV = {
   minor:{c:"#4CAF82",bg:"#E4F4EC",label:"Minor"},
@@ -163,6 +202,7 @@ const SEV = {
   severe:{c:"#D9534F",bg:"#FBE3E2",label:"Severe"},
 };
 const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const fmt=n=>"$"+Number(n).toFixed(2);
 
 const fileInput=document.getElementById("fileInput");
 fileInput.addEventListener("change",e=>{
@@ -180,8 +220,6 @@ async function analyze(){
   state.error="";state.screen="analyzing";render();
   const photos=state.photos.slice(0,6).map(p=>({base64:p.base64,mime:p.mime}));
   try{
-    // When deployed behind the backend, this hits /api/analyze.
-    // Falls back to direct call when running inside the Claude preview.
     let parsed;
     const useBackend = !location.href.startsWith("blob:") && !location.href.startsWith("about:");
     const v=state.vehicle;
@@ -206,7 +244,6 @@ If you cannot clearly see damage, give your best professional estimate. Use stan
       parsed=await resp.json();
       if(parsed.error)throw new Error(parsed.error);
     }catch(backendErr){
-      // direct fallback (works in the Claude preview environment)
       const imageBlocks=photos.map(p=>({type:"image",source:{type:"base64",media_type:p.mime,data:p.base64}}));
       const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:[...imageBlocks,{type:"text",text:prompt}]}]})});
       const data=await r.json();
@@ -215,6 +252,7 @@ If you cannot clearly see damage, give your best professional estimate. Use stan
     }
     state.damage=parsed;
     state.lineItems=parsed.panels.map((p,i)=>({id:i,desc:`${p.panel} — ${p.repair_method}`,hours:p.labour_hours||1,rate:SHOP_RATE,parts:p.repair_method==="Replace"?350:0,severity:p.severity||"minor"}));
+    state.savedId=null; state.saveFeedback="";
     state.screen="review";render();
   }catch(err){
     state.error="We couldn't analyse those photos just now. Please try again — clear, well-lit shots work best.";state.screen="capture";render();
@@ -225,9 +263,67 @@ const updItem=(id,f,val)=>{const it=state.lineItems.find(x=>x.id===id);if(it){it
 const remItem=id=>{state.lineItems=state.lineItems.filter(x=>x.id!==id);render();};
 const addItem=()=>{state.lineItems.push({id:Date.now(),desc:"New repair item",hours:1,rate:SHOP_RATE,parts:0,severity:"minor"});render();};
 function totals(){const labour=state.lineItems.reduce((s,i)=>s+i.hours*i.rate,0);const parts=state.lineItems.reduce((s,i)=>s+(+i.parts||0),0);const sub=labour+parts,gst=sub*0.15;return{labour,parts,sub,gst,total:sub+gst};}
-function recalc(){const el=document.getElementById("totals");if(el)el.innerHTML=totalsInner(totals());const li=document.querySelectorAll("[data-litotal]");li.forEach(n=>{const id=+n.getAttribute("data-litotal");const it=state.lineItems.find(x=>x.id===id);if(it)n.innerHTML=`Item total <b>$${(it.hours*it.rate+(+it.parts||0)).toFixed(2)}</b>`;});}
+function recalc(){
+  const el=document.getElementById("totals");if(el)el.innerHTML=totalsInner(totals());
+  const li=document.querySelectorAll("[data-litotal]");
+  li.forEach(n=>{const id=+n.getAttribute("data-litotal");const it=state.lineItems.find(x=>x.id===id);if(it)n.innerHTML=`Item total <b>${fmt(it.hours*it.rate+(+it.parts||0))}</b>`;});
+}
 const go=s=>{state.screen=s;render();};
-const reset=()=>{state.screen="capture";state.photos=[];state.damage=null;state.lineItems=[];state.error="";render();};
+const reset=()=>{state.screen="capture";state.photos=[];state.damage=null;state.lineItems=[];state.error="";state.savedId=null;state.saveFeedback="";render();};
+
+// ── Save quote to server ──
+async function saveQuote(){
+  if(state.saving)return;
+  state.saving=true; state.saveFeedback=""; render();
+  const t=totals();
+  const body={rego:state.vehicle.rego,vehicle:state.vehicle,damage:state.damage,lineItems:state.lineItems,total:t.total};
+  try{
+    if(state.savedId){
+      await fetch(`/api/quotes/${state.savedId}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    }else{
+      const resp=await fetch("/api/quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const data=await resp.json();
+      if(data.error)throw new Error(data.error);
+      state.savedId=data.id;
+    }
+    state.saveFeedback="ok";
+  }catch(e){
+    state.saveFeedback="err";
+  }
+  state.saving=false; render();
+}
+
+// ── History ──
+async function openHistory(){
+  state.screen="history"; state.quotesLoading=true; render();
+  try{
+    const resp=await fetch("/api/quotes");
+    state.quotes=await resp.json();
+  }catch{state.quotes=[];}
+  state.quotesLoading=false; render();
+}
+
+function loadQuoteById(id){
+  const q=state.quotes.find(x=>x.id===id);
+  if(!q)return;
+  state.vehicle=q.vehicle||{rego:"",make:"",model:"",year:"",colour:""};
+  state.damage=q.damage||null;
+  state.lineItems=(q.line_items||[]).map((it,i)=>({...it,id:it.id??i}));
+  state.savedId=q.id;
+  state.saveFeedback="";
+  state.photos=[];
+  state.screen="quote";
+  render();
+}
+
+async function deleteQuote(id){
+  if(!confirm("Delete this quote? This can't be undone."))return;
+  try{
+    await fetch(`/api/quotes/${id}`,{method:"DELETE"});
+    state.quotes=state.quotes.filter(q=>q.id!==id);
+    render();
+  }catch{alert("Delete failed — please try again.");}
+}
 
 const ORDER=["capture","analyzing","review","quote","export"];
 function journey(){
@@ -245,14 +341,15 @@ function journey(){
 
 function totalsInner(t){
   return `
-    <div class="totline"><span>Labour</span><span>$${t.labour.toFixed(2)}</span></div>
-    <div class="totline"><span>Parts</span><span>$${t.parts.toFixed(2)}</span></div>
-    <div class="totline"><span>GST (15%)</span><span>$${t.gst.toFixed(2)}</span></div>
-    <div class="totline grand"><span>Total</span><span class="amt">$${t.total.toFixed(2)}</span></div>`;
+    <div class="totline"><span>Labour</span><span>${fmt(t.labour)}</span></div>
+    <div class="totline"><span>Parts</span><span>${fmt(t.parts)}</span></div>
+    <div class="totline"><span>GST (15%)</span><span>${fmt(t.gst)}</span></div>
+    <div class="totline grand"><span>Total</span><span class="amt">${fmt(t.total)}</span></div>`;
 }
 
 function render(){
   const s=state.screen; let body="";
+  const showJourney = s!=="history";
 
   if(s==="capture"){
     const v=state.vehicle;
@@ -339,7 +436,7 @@ function render(){
           <div><label class="mini-label">Parts $</label><input class="mini-fld" type="number" value="${it.parts}" oninput="updItem(${it.id},'parts',parseFloat(this.value)||0)"></div>
           <button class="li-del" onclick="remItem(${it.id})">×</button>
         </div>
-        <div class="li-total" data-litotal="${it.id}">Item total <b>$${(it.hours*it.rate+(+it.parts||0)).toFixed(2)}</b></div>
+        <div class="li-total" data-litotal="${it.id}">Item total <b>${fmt(it.hours*it.rate+(+it.parts||0))}</b></div>
       </div>`;
     }).join("");
     const itemsCol=`
@@ -353,7 +450,7 @@ function render(){
         <div class="totals" id="totals">${totalsInner(t)}</div>
         <div class="btnrow" style="margin-top:16px;">
           <button class="btn btn-ghost" onclick="go('review')">Back</button>
-          <button class="btn btn-primary grow" onclick="go('export')">Finish estimate</button>
+          <button class="btn btn-primary grow" onclick="go('export')">Finish estimate →</button>
         </div>
       </div>`;
     body=`
@@ -364,25 +461,98 @@ function render(){
 
   else if(s==="export"){
     const t=totals();
+    const savedBadge = state.saveFeedback==="ok"
+      ? `<div class="save-badge ok">✓ ${state.savedId?'Quote updated':'Quote saved'} — find it in Saved Quotes</div>`
+      : state.saveFeedback==="err"
+      ? `<div class="save-badge err">⚠ Save failed — check your connection</div>`
+      : "";
     body=`
       <div style="text-align:center;padding-top:14px;" class="fade">
         <div class="success-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#4CAF82" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg></div>
         <h1 class="h1">Estimate ready</h1>
-        <p class="sub" style="margin:0 auto 22px;">A clean ${state.lineItems.length}-item quote totalling <b style="color:var(--teal-deep);">$${t.total.toFixed(2)}</b>, ready to send.</p>
+        <p class="sub" style="margin:0 auto 22px;">A ${state.lineItems.length}-item quote totalling <b style="color:var(--teal-deep);">${fmt(t.total)}</b> incl. GST, ready to send.</p>
       </div>
       <div class="totals" style="margin-bottom:16px;">${totalsInner(t)}</div>
-      <button class="btn btn-primary" onclick="alert('In the full build this sends straight to Panel Quote via the Chrome extension.')">
-        Send to Panel Quote
+      ${savedBadge}
+      <button class="btn btn-primary" style="margin-bottom:11px;" onclick="${state.saving?'':'{saveQuote()}'}" ${state.saving?'disabled':''}>
+        ${state.saving
+          ? `<svg style="animation:spin 1s linear infinite" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M12 3v3m0 12v3M3 12h3m12 0h3"/></svg> Saving…`
+          : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg> ${state.savedId?'Update saved quote':'Save quote'}`
+        }
       </button>
-      <div class="btnrow" style="margin-top:11px;">
-        <button class="btn btn-ghost" onclick="alert('PDF export comes with the full build.')">Save as PDF</button>
+      <div class="btnrow" style="margin-bottom:11px;">
         <button class="btn btn-ghost" onclick="go('quote')">Edit estimate</button>
+        <button class="btn btn-ghost" onclick="alert('Send to Panel Quote comes with the Chrome extension.')">Send to Panel Quote</button>
       </div>
       <div class="info-strip">
         <span>💡</span>
-        <span>Open Panel Quote in Chrome and tap the CrashQuote extension — it fills every field for you, then you review and submit.</span>
+        <span>Save the quote above so you can find it later in Saved Quotes — or edit and re-save any time.</span>
       </div>
       <button class="btn btn-ghost" style="margin-top:14px;color:var(--slate);" onclick="reset()">Start a new quote</button>`;
+  }
+
+  else if(s==="history"){
+    const {quotesLoading, quotes} = state;
+    let cards="";
+    if(quotesLoading){
+      cards=`<div style="text-align:center;padding:50px 0;color:var(--slate);">
+        <div class="scanner" style="margin:0 auto 16px;"></div>
+        Loading quotes…
+      </div>`;
+    }else if(!quotes.length){
+      cards=`<div class="empty-state">
+        <div class="empty-icon">📋</div>
+        <div class="empty-h">No saved quotes yet</div>
+        <div class="empty-sub">Finish an estimate and tap Save quote to see it here.</div>
+      </div>`;
+    }else{
+      cards=quotes.map(q=>{
+        const v=q.vehicle||{};
+        const vehicleName=[v.make,v.model,v.year].filter(Boolean).join(' ')||'Unknown vehicle';
+        const d=new Date(q.updated_at);
+        const dateStr=d.toLocaleDateString('en-NZ',{day:'numeric',month:'short',year:'numeric'});
+        const timeStr=d.toLocaleTimeString('en-NZ',{hour:'2-digit',minute:'2-digit'});
+        const items=Array.isArray(q.line_items)?q.line_items:[];
+        return `<div class="qcard fade">
+          <div class="qcard-top">
+            <div>
+              <div class="qcard-rego">${esc(q.rego||'No rego')}</div>
+              <div class="qcard-vehicle">${esc(vehicleName)}</div>
+              <div class="qcard-date">${dateStr} · ${timeStr} · ${items.length} item${items.length!==1?'s':''}</div>
+            </div>
+            <div class="qcard-total">
+              <div class="qcard-amount">${fmt(q.total)}</div>
+              <div class="qcard-gst">incl. GST</div>
+            </div>
+          </div>
+          <div class="btnrow">
+            <button class="btn btn-danger" style="padding:12px;font-size:13px;" onclick="deleteQuote(${q.id})">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6M10,11v6M14,11v6M9,6V4h6v2"/></svg>
+              Delete
+            </button>
+            <button class="btn btn-primary grow" style="padding:12px;font-size:13px;" onclick="loadQuoteById(${q.id})">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Edit & view
+            </button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    body=`
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <h1 class="h1" style="margin:0;">Saved quotes</h1>
+        <button class="btn btn-ghost" style="width:auto;padding:10px 16px;font-size:13px;" onclick="openHistory()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          Refresh
+        </button>
+      </div>
+      <p class="sub">${quotes.length?`${quotes.length} quote${quotes.length!==1?'s':''} saved`:'All your saved quotes appear here.'}</p>
+      ${cards}
+      <button class="btn btn-primary" style="margin-top:4px;" onclick="reset()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New quote
+      </button>`;
   }
 
   document.getElementById("app").innerHTML=`
@@ -391,9 +561,15 @@ function render(){
         <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M5 13l1.5-4.5A2 2 0 018.4 7h7.2a2 2 0 011.9 1.5L19 13M5 13h14M5 13v4m14-4v4M7 17h2m6 0h2"/><circle cx="7.5" cy="14.5" r="1"/><circle cx="16.5" cy="14.5" r="1"/></svg></div>
         <div><div class="brandname">CrashQuote</div><div class="brandsub">Repair estimates, instantly</div></div>
       </div>
-      <div class="trust"><span class="dot"></span>AI-assisted</div>
+      <div class="topbar-actions">
+        <button class="hist-btn" onclick="openHistory()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9,22 9,12 15,12 15,22"/></svg>
+          Saved quotes
+        </button>
+        <div class="trust"><span class="dot"></span>AI-assisted</div>
+      </div>
     </div>
-    <div class="journey">${journey()}</div>
+    ${showJourney?`<div class="journey">${journey()}</div>`:''}
     <div class="content">${body}</div>`;
 }
 render();
